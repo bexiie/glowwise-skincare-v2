@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import csv
 from datetime import datetime
 
 
@@ -82,3 +83,28 @@ def limpar_texto(texto):
     if texto is None:
         return ""
     return re.sub(r"\s+", " ", str(texto)).strip()
+
+def salvar_csv_acumulado(dados, caminho, colunas):
+    """
+    Acrescenta registros a um arquivo CSV.
+    Cria o cabeçalho somente quando o arquivo ainda não existe ou está vazio.
+    """
+    pasta = os.path.dirname(caminho)
+
+    if pasta:
+        garantir_pasta(pasta)
+
+    arquivo_existe = os.path.exists(caminho)
+    arquivo_vazio = not arquivo_existe or os.path.getsize(caminho) == 0
+
+    with open(caminho, "a", newline="", encoding="utf-8-sig") as arquivo:
+        escritor = csv.DictWriter(
+            arquivo,
+            fieldnames=colunas,
+            extrasaction="ignore",
+        )
+
+        if arquivo_vazio:
+            escritor.writeheader()
+
+        escritor.writerows(dados)

@@ -1,6 +1,6 @@
 .env
 .venv/
-.rpa-rebecca/
+.ml-glowwise/
 __pycache__/
 *.pyc
 *.log
@@ -8,3 +8,4 @@ __pycache__/
 **/token_sheets.json
 *.zip
 requirements.txt
+data/raw/execucoes/*.csv

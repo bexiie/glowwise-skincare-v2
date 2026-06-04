@@ -180,7 +180,17 @@ def entry_para_dict(entry: Any) -> dict:
             return data["values"]
 
     payload = {}
-    for campo in ["produto", "loja", "preco", "link", "disponivel", "data_coleta", "termo_busca"]:
+    for campo in [
+        "run_id",
+        "produto",
+        "loja",
+        "preco",
+        "link",
+        "disponivel",
+        "data_coleta",
+        "termo_busca",
+        "categoria_busca",
+    ]:
         try:
             payload[campo] = entry[campo]
         except Exception:
@@ -217,6 +227,8 @@ def carregar_registros_do_datapool(maestro, execution):
                     "disponivel": str(dados.get("disponivel")).lower() == "true",
                     "data_coleta": limpar_texto(dados.get("data_coleta")),
                     "termo_busca": padronizar_termo(dados.get("termo_busca")),
+                    "run_id": limpar_texto(dados.get("run_id")),
+                    "categoria_busca": limpar_texto(dados.get("categoria_busca")),  
                 }
             )
 
@@ -311,6 +323,7 @@ def carregar_registros(maestro, execution):
 def montar_dataframe_coleta(registros) -> pd.DataFrame:
     """Cria o DataFrame da coleta mantendo uma ordem estável de colunas."""
     colunas = [
+        "run_id",
         "produto",
         "loja",
         "preco",
@@ -318,6 +331,7 @@ def montar_dataframe_coleta(registros) -> pd.DataFrame:
         "disponivel",
         "data_coleta",
         "termo_busca",
+        "categoria_busca",
     ]
 
     if not registros:
@@ -409,6 +423,7 @@ def escrever_aba(gs, nome_aba: str, df: pd.DataFrame, colunas: list[str]) -> Non
 def escrever_aba_coleta_bruta(gs, df: pd.DataFrame) -> None:
     """Escreve a coleta bruta na planilha."""
     colunas = [
+        "run_id",
         "produto",
         "loja",
         "preco",
@@ -416,6 +431,7 @@ def escrever_aba_coleta_bruta(gs, df: pd.DataFrame) -> None:
         "disponivel",
         "data_coleta",
         "termo_busca",
+        "categoria_busca",
     ]
     escrever_aba(gs, ABA_COLETA_BRUTA, df, colunas)
 

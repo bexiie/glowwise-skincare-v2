@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from botcity.web import WebBot, Browser
+import uuid
+from urllib.parse import urljoin
+from types import SimpleNamespace
 from webdriver_manager.chrome import ChromeDriverManager
 from botcity.maestro import (
     BotMaestroSDK,
@@ -28,6 +31,7 @@ from botcity.maestro import (
 from utils import (
     agora_str,
     salvar_json,
+    salvar_csv_acumulado,
     normalizar_preco,
     limpar_texto,
     nome_produto_valido,
@@ -38,6 +42,8 @@ from utils import (
 # CONFIGURAÇÕES
 # =========================
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = BASE_DIR.parent
+
 load_dotenv(BASE_DIR / ".env")
 
 DATAPOOL_LABEL = "rebecca-skincare-monitoramento"
@@ -46,10 +52,36 @@ DATAPOOL_TERMOS_LABEL = "rebecca-skincare-termos"
 ARTIFACTS_DIR = BASE_DIR / "artifacts" / "coleta"
 OUTPUT_JSON = ARTIFACTS_DIR / "coleta.json"
 
-BASE = "hidratante facial"
-ATIVOS = ["vitamina c", "niacinamida"]
+RAW_DATA_DIR = PROJECT_DIR / "data" / "raw"
+EXECUCOES_DIR = RAW_DATA_DIR / "execucoes"
 
-MAX_RESULTADOS_POR_LOJA = 5
+RUN_ID = uuid.uuid4().hex[:12]
+
+OUTPUT_CSV_HISTORICO = RAW_DATA_DIR / "produtos_coletados_historico.csv"
+OUTPUT_CSV_EXECUCAO = EXECUCOES_DIR / f"produtos_coletados_{RUN_ID}.csv"
+
+COLUNAS_DATASET = [
+    "run_id",
+    "produto",
+    "termo_busca",
+    "categoria_busca",
+    "loja",
+    "preco",
+    "link",
+    "disponivel",
+    "data_coleta",
+]
+
+TERMOS_PESQUISA = [
+    "gel de limpeza facial",
+    "hidratante facial",
+    "protetor solar facial",
+    "serum facial vitamina c",
+    "serum facial niacinamida",
+    "serum facial acido salicilico",
+]
+
+MAX_RESULTADOS_POR_LOJA = 15
 TEMPO_ESPERA = 2
 WAIT_TIMEOUT = 5
 
@@ -68,7 +100,7 @@ def esperar(segundos=TEMPO_ESPERA):
 
 
 def gerar_termos_padrao():
-    return [f"{BASE} {a}" for a in ATIVOS]
+     return TERMOS_PESQUISA.copy()
 
 
 def ler_bool_env(nome_variavel: str, padrao: bool = False) -> bool:
@@ -137,17 +169,29 @@ def produto_corresponde_ao_termo(nome, termo):
 # MAESTRO
 # =========================
 def iniciar_maestro():
-    """Login no Maestro"""
+    """
+    Inicia o Maestro quando o bot é executado pelo Runner.
+    Durante testes locais, cria uma execução simulada para permitir
+    que a raspagem e a geração dos arquivos funcionem normalmente.
+    """
+    modo_local = os.getenv("MODO_LOCAL", "true").lower() == "true"
+
+    if modo_local:
+        print("[INFO] Execução local ativada.")
+        print("[INFO] Integrações com Maestro e DataPool serão ignoradas neste teste.")
+
+        execution = SimpleNamespace(
+            task_id=f"local-{RUN_ID}",
+            parameters={},
+        )
+
+        return None, execution
+
     maestro = BotMaestroSDK.from_sys_args()
-
-    maestro.login(
-        server=os.getenv("MAESTRO_SERVER"),
-        login=os.getenv("MAESTRO_LOGIN"),
-        key=os.getenv("MAESTRO_KEY"),
-    )
-
     execution = maestro.get_execution()
-    print(f"[INFO] Task ID: {execution.task_id}")
+
+    print(f"[INFO] Execução recebida pelo Maestro: {execution.task_id}")
+
     return maestro, execution
 
 
@@ -184,6 +228,71 @@ def criar_bot():
     return bot
 
 
+def identificar_categoria_busca(termo: str) -> str:
+    """Identifica a categoria principal a partir do termo pesquisado."""
+    termo = limpar_texto(termo).lower()
+
+    if "limpeza" in termo:
+        return "limpeza"
+
+    if "hidratante" in termo:
+        return "hidratacao"
+
+    if "protetor solar" in termo:
+        return "protecao_solar"
+
+    if "serum" in termo:
+        return "tratamento"
+
+    return "outros"
+
+
+def normalizar_link(link: str, loja: str) -> str:
+    """Transforma links relativos em links absolutos."""
+    bases = {
+        "Drogasil": "https://www.drogasil.com.br",
+        "Beleza na Web": "https://www.belezanaweb.com.br",
+    }
+
+    return urljoin(bases.get(loja, ""), link or "")
+
+
+def montar_registro(produto, termo, loja, preco, link):
+    """Cria um registro padronizado para JSON, CSV e DataPool."""
+    return {
+        "run_id": RUN_ID,
+        "produto": limpar_texto(produto),
+        "termo_busca": limpar_texto(termo).lower(),
+        "categoria_busca": identificar_categoria_busca(termo),
+        "loja": loja,
+        "preco": float(preco),
+        "link": normalizar_link(link, loja),
+        "disponivel": True,
+        "data_coleta": agora_str(),
+    }
+
+
+def remover_duplicados(registros):
+    """
+    Remove repetições dentro da mesma execução.
+    Mantém o termo pesquisado na chave porque um produto pode aparecer
+    legitimamente em pesquisas diferentes.
+    """
+    unicos = {}
+
+    for item in registros:
+        chave = (
+            item["termo_busca"],
+            item["produto"].lower(),
+            item["loja"],
+            item["preco"],
+            item["link"],
+        )
+
+        unicos[chave] = item
+
+    return list(unicos.values())
+
 # =========================
 # EXTRAÇÃO
 # =========================
@@ -214,15 +323,15 @@ def extrair_cards(html, termo, loja):
             if not produto_corresponde_ao_termo(nome, termo):
                 continue
 
-            produtos.append({
-                "produto": nome,
-                "termo_busca": termo,
-                "loja": loja,
-                "preco": preco,
-                "link": link,
-                "disponivel": True,
-                "data_coleta": agora_str(),
-            })
+            produtos.append(
+                montar_registro(
+                    produto=nome,
+                    termo=termo,
+                    loja=loja,
+                    preco=preco,
+                    link=link,
+                )
+            )
 
     return produtos[:MAX_RESULTADOS_POR_LOJA]
 
@@ -263,15 +372,15 @@ def extrair_cards_drogasil(driver, termo):
                         link = None
 
                     if link and "/search?" not in link:
-                        produtos.append({
-                            "produto": nome,
-                            "termo_busca": termo,
-                            "loja": "Drogasil",
-                            "preco": preco,
-                            "link": link,
-                            "disponivel": True,
-                            "data_coleta": agora_str(),
-                        })
+                        produtos.append(
+                            montar_registro(
+                                produto=nome,
+                                termo=termo,
+                                loja="Drogasil",
+                                preco=preco,
+                                link=link,
+                            )
+                        )
                         break
 
         except Exception:
@@ -307,12 +416,14 @@ def buscar(bot, url, termo, loja):
 # DATAPOOL
 # =========================
 def enviar_datapool(maestro, registros):
+    if maestro is None:
+        print("[INFO] Execução local: envio ao DataPool ignorado.")
+    return
     """Envia dados para DataPool"""
     datapool = maestro.get_datapool(label=DATAPOOL_LABEL)
 
     for item in registros:
         datapool.create_entry(DataPoolEntry(values=item))
-
 
 # =========================
 # MAIN
@@ -360,32 +471,65 @@ def main():
             )
             return
 
+        registros = remover_duplicados(registros)
+
+        print(f"[INFO] Registros após remoção de duplicados: {len(registros)}")
+        print(f"[INFO] ID da execução: {RUN_ID}")
+
         salvar_json(registros, str(OUTPUT_JSON))
+
+        salvar_csv_acumulado(
+            registros,
+            str(OUTPUT_CSV_EXECUCAO),
+            COLUNAS_DATASET,
+        )
+
+        salvar_csv_acumulado(
+            registros,
+            str(OUTPUT_CSV_HISTORICO),
+            COLUNAS_DATASET,
+        )
+
+        print(f"[OK] JSON salvo em: {OUTPUT_JSON}")
+        print(f"[OK] CSV da execução salvo em: {OUTPUT_CSV_EXECUCAO}")
+        print(f"[OK] Histórico atualizado em: {OUTPUT_CSV_HISTORICO}")
+
         enviar_datapool(maestro, registros)
 
-        maestro.post_artifact(
-            task_id=execution.task_id,
-            artifact_name="coleta.json",
-            filepath=str(OUTPUT_JSON),
-        )
+        if maestro is not None:
+            print(f"[OK] Registros enviados ao DataPool: {len(registros)}")
+            maestro.post_artifact(
+                task_id=execution.task_id,
+                artifact_name="coleta.json",
+                filepath=str(OUTPUT_JSON),
+            )
 
-        finalizar_task(
-            maestro,
-            execution,
-            AutomationTaskFinishStatus.SUCCESS,
-            f"{len(registros)} registros coletados",
-            total_items=len(termos),
-            processed_items=len(termos),
-        )
+        if maestro is not None:
+            maestro.post_artifact(
+                task_id=execution.task_id,
+                artifact_name=f"produtos_coletados_{RUN_ID}.csv",
+                filepath=str(OUTPUT_CSV_EXECUCAO),
+            )
 
+        if maestro is not None:
+            finalizar_task(
+                maestro,
+                execution,
+                AutomationTaskFinishStatus.SUCCESS,
+                f"{len(registros)} registros coletados",
+                total_items=len(termos),
+                processed_items=len(termos),
+            )
+    
     except Exception as e:
-        finalizar_task(
-            maestro,
-            execution,
-            AutomationTaskFinishStatus.FAILED,
-            str(e),
-        )
-        raise
+        if maestro is not None:
+            finalizar_task(
+                maestro,
+                execution,
+                AutomationTaskFinishStatus.FAILED,
+                str(e),
+            )
+            raise
 
     finally:
         bot.stop_browser()
