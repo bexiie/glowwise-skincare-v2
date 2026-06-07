@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 from botcity.maestro import BotMaestroSDK, AutomationTaskFinishStatus, ErrorType
 from botcity.plugins.googlesheets.plugin import BotGoogleSheetsPlugin
@@ -35,12 +36,14 @@ VAULT_LABEL_GOOGLE = "rebecca-google"
 
 ABA_COLETA_BRUTA = "coleta_bruta"
 ABA_MELHORES_PRECOS = "melhores_precos"
+ML_API_URL = os.getenv("ML_API_URL", "http://localhost:8000/predict")
 
 ARTIFACTS_DIR = BASE_DIR / "artifacts" / "analise"
 OUTPUT_JSON = ARTIFACTS_DIR / "analise_resumo.json"
 
 # Caminhos candidatos para fallback local da coleta.
 COLETA_JSON_CANDIDATOS = [
+    PROJECT_DIR / "bot_coleta_skincare" / "artifacts" / "coleta" / "coleta.json",
     BASE_DIR / "artifacts" / "coleta" / "coleta.json",
     PROJECT_DIR / "artifacts" / "coleta" / "coleta.json",
     BASE_DIR / "coleta.json",
@@ -70,6 +73,22 @@ def padronizar_termo(termo: Any) -> str:
     return limpar_texto(termo).lower()
 
 
+def identificar_categoria_busca(termo: Any) -> str:
+    """Infere a categoria a partir do termo de busca."""
+    termo = padronizar_termo(termo)
+
+    if "limpeza" in termo:
+        return "limpeza"
+    if "hidratante" in termo:
+        return "hidratacao"
+    if "protetor solar" in termo:
+        return "protecao_solar"
+    if "serum" in termo or "vitamina c" in termo or "niacinamida" in termo:
+        return "tratamento"
+
+    return "outros"
+
+
 # =========================
 # MAESTRO
 # =========================
@@ -77,11 +96,12 @@ def iniciar_maestro():
     """Realiza login no Maestro e recupera a execução atual da task."""
     maestro = BotMaestroSDK.from_sys_args()
 
-    maestro.login(
-        server=os.getenv("MAESTRO_SERVER"),
-        login=os.getenv("MAESTRO_LOGIN"),
-        key=os.getenv("MAESTRO_KEY"),
-    )
+    server = os.getenv("MAESTRO_SERVER")
+    login = os.getenv("MAESTRO_LOGIN")
+    key = os.getenv("MAESTRO_KEY")
+
+    if server and login and key:
+        maestro.login(server=server, login=login, key=key)
 
     execution = maestro.get_execution()
     if execution is None or execution.task_id is None:
@@ -150,9 +170,25 @@ def iniciar_google_sheets(maestro) -> BotGoogleSheetsPlugin:
     """Inicializa o plugin do Google Sheets já apontando para a aba de coleta."""
     google_credentials_path = obter_credencial(maestro, VAULT_LABEL_GOOGLE, "credentials_path")
     google_spreadsheet_id = obter_credencial(maestro, VAULT_LABEL_GOOGLE, "spreadsheet_id")
+    credentials_path = Path(google_credentials_path)
+
+    if not credentials_path.is_absolute():
+        candidatos = [
+            BASE_DIR / credentials_path,
+            Path.cwd() / credentials_path,
+        ]
+        credentials_path = next((caminho for caminho in candidatos if caminho.exists()), credentials_path)
+
+    if not credentials_path.exists():
+        raise FileNotFoundError(
+            "Arquivo de credenciais do Google Sheets nao encontrado. "
+            f"Valor recebido no Vault rebecca-google/credentials_path: {google_credentials_path!r}. "
+            "No BotCity Runner, use um caminho absoluto para o arquivo no computador do Runner "
+            "ou inclua o arquivo no pacote do bot."
+        )
 
     return BotGoogleSheetsPlugin(
-        client_secret_path=google_credentials_path,
+        client_secret_path=str(credentials_path),
         spreadsheet_id=google_spreadsheet_id,
         active_sheet=ABA_COLETA_BRUTA,
     )
@@ -290,6 +326,7 @@ def carregar_registros_do_json():
                 "disponivel": bool(item.get("disponivel", True)),
                 "data_coleta": limpar_texto(item.get("data_coleta")),
                 "termo_busca": padronizar_termo(item.get("termo_busca")),
+                "categoria_busca": identificar_categoria_busca(item.get("termo_busca")),
             }
         )
 
@@ -338,6 +375,10 @@ def montar_dataframe_coleta(registros) -> pd.DataFrame:
         return pd.DataFrame(columns=colunas)
 
     df = pd.DataFrame(registros)
+    for coluna in colunas:
+        if coluna not in df.columns:
+            df[coluna] = ""
+
     return df[colunas]
 
 
@@ -345,12 +386,16 @@ def montar_dataframe_melhores_por_termo(df: pd.DataFrame) -> pd.DataFrame:
     """Gera um DataFrame com a melhor oferta por termo de busca."""
     colunas_saida = [
         "termo_busca",
+        "categoria_busca",
         "produto",
         "loja",
         "preco",
         "link",
         "quantidade_ofertas_no_termo",
         "data_analise",
+        "recomendacao_ml",
+        "probabilidade_vale_comprar",
+        "justificativa_ml",
     ]
 
     if df.empty:
@@ -388,16 +433,68 @@ def montar_dataframe_melhores_por_termo(df: pd.DataFrame) -> pd.DataFrame:
         resultados.append(
             {
                 "termo_busca": termo,
+                "categoria_busca": identificar_categoria_busca(termo),
                 "produto": melhor["produto"],
                 "loja": melhor["loja"],
                 "preco": float(melhor["preco"]),
                 "link": melhor["link"],
                 "quantidade_ofertas_no_termo": int(len(grupo)),
                 "data_analise": agora_str(),
+                "recomendacao_ml": "",
+                "probabilidade_vale_comprar": None,
+                "justificativa_ml": "",
             }
         )
 
     return pd.DataFrame(resultados, columns=colunas_saida)
+
+
+def montar_payload_ml(item: pd.Series) -> dict[str, Any]:
+    """Monta o payload esperado pela FastAPI de predicao."""
+    return {
+        "produto": limpar_texto(item.get("produto")),
+        "marca": "",
+        "termo_busca": limpar_texto(item.get("termo_busca")),
+        "categoria_busca": limpar_texto(item.get("categoria_busca")),
+        "loja": limpar_texto(item.get("loja")),
+        "preco": float(item.get("preco")),
+        "produto_original": limpar_texto(item.get("produto")),
+    }
+
+
+def chamar_api_ml(item: pd.Series) -> dict[str, Any]:
+    """Consulta a API local e devolve a decisao do modelo."""
+    resposta = requests.post(ML_API_URL, json=montar_payload_ml(item), timeout=10)
+    resposta.raise_for_status()
+    return resposta.json()
+
+
+def aplicar_predicoes_ml(df_melhores: pd.DataFrame) -> pd.DataFrame:
+    """Adiciona recomendacao do modelo aos melhores precos."""
+    if df_melhores.empty:
+        return df_melhores
+
+    df = df_melhores.copy()
+
+    for indice, item in df.iterrows():
+        try:
+            predicao = chamar_api_ml(item)
+            df.at[indice, "recomendacao_ml"] = predicao.get("classe", "")
+            df.at[indice, "probabilidade_vale_comprar"] = predicao.get("probabilidade_vale_comprar")
+            df.at[indice, "justificativa_ml"] = predicao.get("justificativa", "")
+            print(
+                "[ML] "
+                f"{item.get('termo_busca')}: "
+                f"{predicao.get('classe')} "
+                f"prob={predicao.get('probabilidade_vale_comprar')}"
+            )
+        except Exception as e:
+            df.at[indice, "recomendacao_ml"] = "api_indisponivel"
+            df.at[indice, "probabilidade_vale_comprar"] = None
+            df.at[indice, "justificativa_ml"] = f"Falha ao consultar API ML: {e}"
+            print(f"[AVISO] Falha ao consultar API ML para {item.get('termo_busca')}: {e}")
+
+    return df
 
 
 # =========================
@@ -440,12 +537,16 @@ def escrever_aba_melhores_precos(gs, df: pd.DataFrame) -> None:
     """Escreve o resumo de melhores preços na planilha."""
     colunas = [
         "termo_busca",
+        "categoria_busca",
         "produto",
         "loja",
         "preco",
         "link",
         "quantidade_ofertas_no_termo",
         "data_analise",
+        "recomendacao_ml",
+        "probabilidade_vale_comprar",
+        "justificativa_ml",
     ]
     escrever_aba(gs, ABA_MELHORES_PRECOS, df, colunas)
 
@@ -495,6 +596,7 @@ def main() -> None:
 
         df_coleta = montar_dataframe_coleta(registros)
         df_melhores = montar_dataframe_melhores_por_termo(df_coleta)
+        df_melhores = aplicar_predicoes_ml(df_melhores)
 
         print(f"[INFO] Linhas na coleta_bruta: {len(df_coleta)}")
         print(f"[INFO] Linhas em melhores_precos: {len(df_melhores)}")

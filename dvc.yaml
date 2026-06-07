@@ -1,0 +1,27 @@
+stages:
+  gerar_dataset:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py
+    deps:
+      - bot_coleta_skincare/artifacts/coleta/coleta.json
+      - ml/gerar_dataset.py
+    outs:
+      - data/raw/produtos_coletados_historico.csv
+      - data/processed/produtos_sanitizados.csv
+
+  treinar_modelo:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\treinar_modelo.py
+    deps:
+      - data/processed/produtos_sanitizados.csv
+      - ml/treinar_modelo.py
+    outs:
+      - data/processed/produtos_ml.csv
+      - mlflow.db
+      - mlruns
+
+  gerar_relatorio_drift:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_drift.py
+    deps:
+      - data/processed/produtos_ml.csv
+      - ml/gerar_relatorio_drift.py
+    outs:
+      - reports/evidently/relatorio_drift.html

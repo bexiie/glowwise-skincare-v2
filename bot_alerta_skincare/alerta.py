@@ -43,11 +43,12 @@ def iniciar_maestro():
     """Realiza login no Maestro e recupera a execução atual."""
     maestro = BotMaestroSDK.from_sys_args()
 
-    maestro.login(
-        server=os.getenv("MAESTRO_SERVER"),
-        login=os.getenv("MAESTRO_LOGIN"),
-        key=os.getenv("MAESTRO_KEY"),
-    )
+    server = os.getenv("MAESTRO_SERVER")
+    login = os.getenv("MAESTRO_LOGIN")
+    key = os.getenv("MAESTRO_KEY")
+
+    if server and login and key:
+        maestro.login(server=server, login=login, key=key)
 
     execution = maestro.get_execution()
     if execution is None or execution.task_id is None:
@@ -177,6 +178,8 @@ def montar_mensagem(itens: list[dict[str, Any]]) -> str:
         loja = _obter_campo(item, "loja", "site")
         preco = _obter_campo(item, "preco", "preco_atual", "menor_preco")
         url = _obter_campo(item, "url", "link", "href")
+        recomendacao_ml = _obter_campo(item, "recomendacao_ml", "classe_ml")
+        probabilidade_ml = _obter_campo(item, "probabilidade_vale_comprar", "probabilidade_ml")
 
         if not produto:
             produto = "Produto sem nome"
@@ -186,6 +189,12 @@ def montar_mensagem(itens: list[dict[str, Any]]) -> str:
             f"Loja: {loja or 'Nao informado'}",
             f"Preco: {preco or 'Nao informado'}",
         ]
+
+        if recomendacao_ml:
+            bloco.append(f"ML: {recomendacao_ml}")
+
+        if probabilidade_ml:
+            bloco.append(f"Probabilidade vale comprar: {probabilidade_ml}")
 
         if url:
             bloco.append(f"Link: {url}")

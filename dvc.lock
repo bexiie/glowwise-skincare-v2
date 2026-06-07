@@ -1,0 +1,63 @@
+schema: '2.0'
+stages:
+  gerar_dataset:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py
+    deps:
+    - path: bot_coleta_skincare/artifacts/coleta/coleta.json
+      hash: md5
+      md5: 8158f7575746a7ffebca66620440700a
+      size: 17641
+    - path: ml/gerar_dataset.py
+      hash: md5
+      md5: e8b71d4c8854bc9a44649a733d2fc817
+      size: 8483
+    outs:
+    - path: data/processed/produtos_sanitizados.csv
+      hash: md5
+      md5: ee4793b4c99bc258bdb34dcdf207ef50
+      size: 22860
+    - path: data/raw/produtos_coletados_historico.csv
+      hash: md5
+      md5: 4a37fd1745e31a4b4de8fa5f889d14b1
+      size: 13060
+  treinar_modelo:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\treinar_modelo.py
+    deps:
+    - path: data/processed/produtos_sanitizados.csv
+      hash: md5
+      md5: ee4793b4c99bc258bdb34dcdf207ef50
+      size: 22860
+    - path: ml/treinar_modelo.py
+      hash: md5
+      md5: 977c527708eab35015e7919cd5822e98
+      size: 8315
+    outs:
+    - path: data/processed/produtos_ml.csv
+      hash: md5
+      md5: bea47cb52bfd0addb199ee5cb8d4f4c2
+      size: 31730
+    - path: mlflow.db
+      hash: md5
+      md5: 37ebbcbd65d7e9d1fc2016aed59cc626
+      size: 712704
+    - path: mlruns
+      hash: md5
+      md5: b1213a446294e042ddbcad83f4760cfa.dir
+      size: 447647
+      nfiles: 24
+  gerar_relatorio_drift:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_drift.py
+    deps:
+    - path: data/processed/produtos_ml.csv
+      hash: md5
+      md5: bea47cb52bfd0addb199ee5cb8d4f4c2
+      size: 31730
+    - path: ml/gerar_relatorio_drift.py
+      hash: md5
+      md5: 7c990a83504b56317566c5c4432a465a
+      size: 3377
+    outs:
+    - path: reports/evidently/relatorio_drift.html
+      hash: md5
+      md5: b46ce105f89c8235ccc24f98ecfe655a
+      size: 3776500
