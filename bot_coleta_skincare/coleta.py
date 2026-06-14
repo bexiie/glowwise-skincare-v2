@@ -11,6 +11,8 @@ Responsabilidades:
 import os
 import re
 import time
+import queue
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
@@ -54,6 +56,9 @@ ATIVOS = ["vitamina c", "niacinamida"]
 MAX_RESULTADOS_POR_LOJA = 10
 TEMPO_ESPERA = 2
 WAIT_TIMEOUT = 6
+TIMEOUT_BUSCA_SEGUNDOS = int(os.getenv("TIMEOUT_BUSCA_SEGUNDOS", "45"))
+TIMEOUT_DATAPOOL_SEGUNDOS = int(os.getenv("TIMEOUT_DATAPOOL_SEGUNDOS", "60"))
+TIMEOUT_ARTIFACT_SEGUNDOS = int(os.getenv("TIMEOUT_ARTIFACT_SEGUNDOS", "30"))
 
 BASE_URL_POR_LOJA = {
     "Drogasil": "https://www.drogasil.com.br",
@@ -72,6 +77,29 @@ def garantir_pasta(caminho):
 
 def esperar(segundos=TEMPO_ESPERA):
     time.sleep(segundos)
+
+
+def executar_com_timeout(funcao, timeout_segundos, descricao, *args, **kwargs):
+    """Executa uma operacao externa com limite para nao prender o Runner."""
+    resultado = queue.Queue(maxsize=1)
+
+    def alvo():
+        try:
+            resultado.put(("ok", funcao(*args, **kwargs)))
+        except Exception as e:
+            resultado.put(("erro", e))
+
+    thread = threading.Thread(target=alvo, daemon=True)
+    thread.start()
+    thread.join(timeout_segundos)
+
+    if thread.is_alive():
+        raise TimeoutError(f"Timeout em {descricao} apos {timeout_segundos}s.")
+
+    status, valor = resultado.get()
+    if status == "erro":
+        raise valor
+    return valor
 
 
 def gerar_termos_padrao():
@@ -99,8 +127,8 @@ def iniciar_maestro():
     modo_local = os.getenv("MODO_LOCAL", "false").lower() == "true"
 
     if modo_local:
-        print("[INFO] Execucao local ativada.")
-        print("[INFO] Maestro/DataPool serao ignorados nesta execucao.")
+        print("[INFO] Execução local ativada.")
+        print("[INFO] Maestro/DataPool serão ignorados nesta execução.")
         execution = SimpleNamespace(task_id="local", parameters={})
         return None, execution
 
@@ -159,9 +187,27 @@ def criar_bot():
 # EXTRAÇÃO
 # =========================
 def extrair_preco(texto):
-    """Extrai preço de string"""
-    match = re.search(r"R\$\s*\d+,\d{2}", texto)
-    return normalizar_preco(match.group()) if match else None
+    """Extrai o preco vigente, priorizando valores promocionais."""
+    texto = limpar_texto(texto)
+    if not texto:
+        return None
+
+    padrao_preco = r"R\$\s*\d+(?:\.\d{3})*,\d{2}"
+    padroes_promocionais = [
+        rf"\bpor\s*({padrao_preco})",
+        rf"({padrao_preco})\s*(?:a|à)\s*vista",
+        rf"({padrao_preco})\s*pagando\s*no\s*pix",
+        rf"pix\s*({padrao_preco})",
+    ]
+
+    for padrao in padroes_promocionais:
+        match = re.search(padrao, texto, flags=re.IGNORECASE)
+        if match:
+            return normalizar_preco(match.group(1))
+
+    precos = [normalizar_preco(valor) for valor in re.findall(padrao_preco, texto)]
+    precos = [preco for preco in precos if preco is not None]
+    return min(precos) if precos else None
 
 
 def limpar_link_produto(link, loja):
@@ -189,6 +235,62 @@ def extrair_cards(html, termo, loja):
     soup = BeautifulSoup(html, "lxml")
     produtos = []
 
+    if loja == "Drogasil":
+        for link_tag in soup.select("a[href*='origin=search'], a[href$='.html']"):
+            nome = limpar_texto(link_tag.get_text(" "))
+            link = limpar_link_produto(link_tag.get("href"), loja)
+
+            if not nome or not link or not nome_produto_valido(nome):
+                continue
+
+            preco = None
+            bloco = link_tag
+            for _ in range(8):
+                texto_bloco = limpar_texto(bloco.get_text(" ")) if bloco else ""
+                preco = extrair_preco(texto_bloco)
+                if preco:
+                    break
+                bloco = bloco.parent if bloco else None
+
+            if preco:
+                produtos.append({
+                    "produto": nome[:120],
+                    "termo_busca": termo,
+                    "loja": loja,
+                    "preco": preco,
+                    "link": link,
+                    "disponivel": True,
+                    "data_coleta": agora_str(),
+                })
+
+    seletores_blocos = [
+        "[data-testid*='product']",
+        "[class*='product']",
+        "[class*='Product']",
+        "[class*='card']",
+        "[class*='Card']",
+        "li",
+        "article",
+    ]
+
+    for bloco in soup.select(",".join(seletores_blocos)):
+        texto = limpar_texto(bloco.get_text(" "))
+        preco = extrair_preco(texto)
+        link_tag = bloco.select_one("a[href]")
+        link = limpar_link_produto(link_tag.get("href"), loja) if link_tag else ""
+        nome = limpar_texto(link_tag.get_text(" ")) if link_tag else texto
+
+        if nome and preco and link and nome_produto_valido(nome):
+            produtos.append({
+                "produto": nome[:120],
+                "termo_busca": termo,
+                "loja": loja,
+                "preco": preco,
+                "link": link,
+                "disponivel": True,
+                "data_coleta": agora_str(),
+            })
+
     for card in soup.select("a[href]"):
         texto = limpar_texto(card.get_text())
 
@@ -210,7 +312,17 @@ def extrair_cards(html, termo, loja):
                 "data_coleta": agora_str(),
             })
 
-    return produtos[:MAX_RESULTADOS_POR_LOJA]
+    unicos = []
+    links_vistos = set()
+    for produto in produtos:
+        chave = produto["link"] or f"{produto['produto']}|{produto['preco']}"
+        if chave in links_vistos:
+            continue
+        links_vistos.add(chave)
+        unicos.append(produto)
+
+    print(f"[INFO] {loja} - {termo}: {len(unicos)} produto(s) extraido(s).")
+    return unicos[:MAX_RESULTADOS_POR_LOJA]
 
 
 # =========================
@@ -218,7 +330,26 @@ def extrair_cards(html, termo, loja):
 # =========================
 def buscar(bot, url, termo, loja):
     """Executa busca genérica"""
-    bot.browse(url)
+    try:
+        if bot.driver:
+            bot.driver.set_page_load_timeout(WAIT_TIMEOUT)
+            bot.driver.set_script_timeout(WAIT_TIMEOUT)
+    except Exception:
+        pass
+
+    try:
+        bot.browse(url)
+    except Exception as e:
+        print(f"[AVISO] Timeout/falha ao carregar {loja} para '{termo}': {e}")
+        try:
+            bot.driver.execute_script("window.stop();")
+        except Exception:
+            pass
+        return []
+
+    if not bot.driver:
+        print(f"[AVISO] Driver indisponivel apos tentar carregar {loja} para '{termo}'.")
+        return []
 
     try:
         WebDriverWait(bot.driver, WAIT_TIMEOUT).until(
@@ -227,7 +358,12 @@ def buscar(bot, url, termo, loja):
     except Exception:
         esperar(1)
 
-    html = bot.driver.page_source
+    try:
+        html = bot.driver.page_source
+    except Exception as e:
+        print(f"[AVISO] Nao foi possivel ler HTML de {loja} para '{termo}': {e}")
+        return []
+
     return extrair_cards(html, termo, loja)
 
 
@@ -237,7 +373,7 @@ def buscar(bot, url, termo, loja):
 def enviar_datapool(maestro, registros):
     """Envia dados para DataPool"""
     if maestro is None:
-        print("[INFO] Execucao local: envio ao DataPool ignorado.")
+        print("[INFO] Execução local: envio ao DataPool ignorado.")
         return
 
     datapool = maestro.get_datapool(label=DATAPOOL_LABEL)
@@ -264,14 +400,20 @@ def main():
         for termo in termos:
             print(f"[BUSCA] {termo}")
 
-            registros += buscar(
+            registros += executar_com_timeout(
+                buscar,
+                TIMEOUT_BUSCA_SEGUNDOS,
+                f"busca Drogasil para {termo}",
                 bot,
                 f"https://www.drogasil.com.br/search?w={termo}",
                 termo,
                 "Drogasil",
             )
 
-            registros += buscar(
+            registros += executar_com_timeout(
+                buscar,
+                TIMEOUT_BUSCA_SEGUNDOS,
+                f"busca Beleza na Web para {termo}",
                 bot,
                 f"https://www.belezanaweb.com.br/busca?q={termo}",
                 termo,
@@ -279,10 +421,19 @@ def main():
             )
 
         salvar_json(registros, str(OUTPUT_JSON))
-        enviar_datapool(maestro, registros)
+        executar_com_timeout(
+            enviar_datapool,
+            TIMEOUT_DATAPOOL_SEGUNDOS,
+            "envio ao DataPool",
+            maestro,
+            registros,
+        )
 
         if maestro is not None:
-            maestro.post_artifact(
+            executar_com_timeout(
+                maestro.post_artifact,
+                TIMEOUT_ARTIFACT_SEGUNDOS,
+                "envio do artifact coleta.json",
                 task_id=execution.task_id,
                 artifact_name="coleta.json",
                 filepath=str(OUTPUT_JSON),

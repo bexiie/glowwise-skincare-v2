@@ -12,6 +12,8 @@ Responsabilidades:
 
 import json
 import os
+import queue
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +38,15 @@ VAULT_LABEL_GOOGLE = "rebecca-google"
 
 ABA_COLETA_BRUTA = "coleta_bruta"
 ABA_MELHORES_PRECOS = "melhores_precos"
+ABA_COMPRE_JUNTO = "compre_junto"
 ML_API_URL = os.getenv("ML_API_URL", "http://localhost:8000/predict")
 
 ARTIFACTS_DIR = BASE_DIR / "artifacts" / "analise"
 OUTPUT_JSON = ARTIFACTS_DIR / "analise_resumo.json"
+OUTPUT_COMBOS_JSON = ARTIFACTS_DIR / "compre_junto_resumo.json"
+TIMEOUT_DATAPOOL_SEGUNDOS = int(os.getenv("TIMEOUT_DATAPOOL_SEGUNDOS", "60"))
+TIMEOUT_SHEETS_SEGUNDOS = int(os.getenv("TIMEOUT_SHEETS_SEGUNDOS", "60"))
+TIMEOUT_ARTIFACT_SEGUNDOS = int(os.getenv("TIMEOUT_ARTIFACT_SEGUNDOS", "30"))
 
 # Caminhos candidatos para fallback local da coleta.
 COLETA_JSON_CANDIDATOS = [
@@ -58,6 +65,29 @@ TERMOS_ESPERADOS = [
 ]
 
 BotMaestroSDK.RAISE_NOT_CONNECTED = True
+
+
+def executar_com_timeout(funcao, timeout_segundos, descricao, *args, **kwargs):
+    """Executa uma operacao externa com limite para nao prender o Runner."""
+    resultado = queue.Queue(maxsize=1)
+
+    def alvo():
+        try:
+            resultado.put(("ok", funcao(*args, **kwargs)))
+        except Exception as e:
+            resultado.put(("erro", e))
+
+    thread = threading.Thread(target=alvo, daemon=True)
+    thread.start()
+    thread.join(timeout_segundos)
+
+    if thread.is_alive():
+        raise TimeoutError(f"Timeout em {descricao} apos {timeout_segundos}s.")
+
+    status, valor = resultado.get()
+    if status == "erro":
+        raise valor
+    return valor
 
 
 # =========================
@@ -89,6 +119,28 @@ def identificar_categoria_busca(termo: Any) -> str:
     return "outros"
 
 
+def produto_compativel_com_termo(produto: Any, termo: Any) -> bool:
+    """Evita escolher produto barato que nao corresponde ao termo buscado."""
+    produto = limpar_texto(produto).lower()
+    termo = padronizar_termo(termo)
+
+    if not produto or not termo:
+        return False
+
+    regras = [
+        ("vitamina c", ["vitamina c"]),
+        ("niacinamida", ["niacinamida", "niacinamide"]),
+        ("gel de limpeza", ["gel de limpeza", "limpeza facial", "cleanser", "cleansing"]),
+        ("hidratante", ["hidratante", "hidratacao", "hidratação", "creme", "aqua-gel"]),
+    ]
+
+    for trecho_termo, opcoes_produto in regras:
+        if trecho_termo in termo and not any(opcao in produto for opcao in opcoes_produto):
+            return False
+
+    return True
+
+
 # =========================
 # MAESTRO
 # =========================
@@ -105,9 +157,9 @@ def iniciar_maestro():
 
     execution = maestro.get_execution()
     if execution is None or execution.task_id is None:
-        raise RuntimeError("Nao foi possivel obter a execucao atual do Maestro.")
+        raise RuntimeError("Não foi possível obter a execução atual do Maestro.")
 
-    print(f"[INFO] Execucao Runner detectada. Task ID: {execution.task_id}")
+    print(f"[INFO] Execução Runner detectada. Task ID: {execution.task_id}")
     return maestro, execution
 
 
@@ -122,7 +174,7 @@ def finalizar_task(
 ) -> None:
     """Finaliza a task no Maestro ajustando os contadores para cada cenário."""
     if execution is None or execution.task_id is None:
-        raise RuntimeError("Execution invalida ao tentar finalizar a task.")
+        raise RuntimeError("Execution inválida ao tentar finalizar a task.")
 
     total_items = int(total_items or 0)
     processed_items = int(processed_items or 0)
@@ -159,7 +211,7 @@ def obter_credencial(maestro, label: str, key: str) -> str:
     """Lê uma credencial do Vault e falha explicitamente se ela não existir."""
     valor = maestro.get_credential(label=label, key=key)
     if not valor:
-        raise ValueError(f"Credencial nao encontrada no Vault. label='{label}', key='{key}'")
+        raise ValueError(f"Credencial não encontrada no Vault. label='{label}', key='{key}'")
     return valor
 
 
@@ -181,7 +233,7 @@ def iniciar_google_sheets(maestro) -> BotGoogleSheetsPlugin:
 
     if not credentials_path.exists():
         raise FileNotFoundError(
-            "Arquivo de credenciais do Google Sheets nao encontrado. "
+            "Arquivo de credenciais do Google Sheets não encontrado. "
             f"Valor recebido no Vault rebecca-google/credentials_path: {google_credentials_path!r}. "
             "No BotCity Runner, use um caminho absoluto para o arquivo no computador do Runner "
             "ou inclua o arquivo no pacote do bot."
@@ -279,7 +331,7 @@ def carregar_registros_do_datapool(maestro, execution):
                     finish_message=f"Falha ao processar item: {e}",
                 )
             except Exception as erro_report:
-                print(f"[AVISO] Nao foi possivel reportar erro do item no DataPool: {erro_report}")
+                print(f"[AVISO] Não foi possível reportar erro do item no DataPool: {erro_report}")
             itens_falhos += 1
 
     print(f"[INFO] Itens consumidos do DataPool: {itens_consumidos}")
@@ -302,7 +354,7 @@ def carregar_registros_do_json():
     """Lê o fallback local coleta.json e normaliza os campos encontrados."""
     coleta_json = localizar_coleta_json()
     if not coleta_json:
-        print("[AVISO] JSON de coleta nao encontrado nos caminhos esperados.")
+        print("[AVISO] JSON de coleta não encontrado nos caminhos esperados.")
         return []
 
     try:
@@ -336,7 +388,13 @@ def carregar_registros_do_json():
 def carregar_registros(maestro, execution):
     """Tenta carregar os registros pelo DataPool; se falhar, usa o JSON local."""
     try:
-        registros = carregar_registros_do_datapool(maestro, execution)
+        registros = executar_com_timeout(
+            carregar_registros_do_datapool,
+            TIMEOUT_DATAPOOL_SEGUNDOS,
+            "leitura do DataPool",
+            maestro,
+            execution,
+        )
         if registros:
             print(f"[OK] Registros carregados do DataPool: {len(registros)}")
             return registros, "datapool"
@@ -414,6 +472,21 @@ def montar_dataframe_melhores_por_termo(df: pd.DataFrame) -> pd.DataFrame:
     for coluna in ["produto", "loja", "link"]:
         df_validos[coluna] = df_validos[coluna].fillna("").astype(str).str.strip()
 
+    total_antes_filtro = len(df_validos)
+    df_validos = df_validos[
+        df_validos.apply(
+            lambda row: produto_compativel_com_termo(row["produto"], row["termo_busca"]),
+            axis=1,
+        )
+    ].copy()
+
+    removidos = total_antes_filtro - len(df_validos)
+    if removidos > 0:
+        print(f"[INFO] Produtos removidos por incompatibilidade com o termo: {removidos}")
+
+    if df_validos.empty:
+        return pd.DataFrame(columns=colunas_saida)
+
     termos_presentes = sorted(set(df_validos["termo_busca"].tolist()))
     ordem_preferencial = [termo for termo in TERMOS_ESPERADOS if termo in termos_presentes]
     termos_restantes = [termo for termo in termos_presentes if termo not in ordem_preferencial]
@@ -449,6 +522,116 @@ def montar_dataframe_melhores_por_termo(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(resultados, columns=colunas_saida)
 
 
+def montar_dataframe_compre_junto(df_coleta: pd.DataFrame, df_melhores: pd.DataFrame) -> pd.DataFrame:
+    """Gera recomendacoes de produtos complementares para comprar junto."""
+    colunas_saida = [
+        "termo_principal",
+        "produto_principal",
+        "categoria_principal",
+        "loja_principal",
+        "preco_principal",
+        "link_principal",
+        "termo_recomendado",
+        "produto_recomendado",
+        "categoria_recomendada",
+        "loja_recomendada",
+        "preco_recomendado",
+        "link_recomendado",
+        "preco_total_combo",
+        "economia_frete",
+        "criterio_recomendacao",
+        "data_analise",
+    ]
+
+    if df_coleta.empty or df_melhores.empty:
+        return pd.DataFrame(columns=colunas_saida)
+
+    df_validos = df_coleta[
+        df_coleta["termo_busca"].notna()
+        & (df_coleta["termo_busca"] != "")
+        & df_coleta["preco"].notna()
+        & df_coleta["disponivel"].astype(bool)
+    ].copy()
+
+    if df_validos.empty:
+        return pd.DataFrame(columns=colunas_saida)
+
+    for coluna in ["produto", "loja", "link", "termo_busca"]:
+        df_validos[coluna] = df_validos[coluna].fillna("").astype(str).str.strip()
+
+    df_validos = df_validos[
+        df_validos.apply(
+            lambda row: produto_compativel_com_termo(row["produto"], row["termo_busca"]),
+            axis=1,
+        )
+    ].copy()
+
+    if df_validos.empty:
+        return pd.DataFrame(columns=colunas_saida)
+
+    df_validos["categoria_busca"] = df_validos["termo_busca"].apply(identificar_categoria_busca)
+
+    resultados = []
+    for _, principal in df_melhores.iterrows():
+        termo_principal = limpar_texto(principal.get("termo_busca"))
+        produto_principal = limpar_texto(principal.get("produto"))
+        loja_principal = limpar_texto(principal.get("loja"))
+        categoria_principal = limpar_texto(principal.get("categoria_busca")) or identificar_categoria_busca(termo_principal)
+
+        candidatos = df_validos[
+            (df_validos["termo_busca"] != termo_principal)
+            & (df_validos["produto"].str.lower() != produto_principal.lower())
+        ].copy()
+
+        candidatos_complementares = candidatos[candidatos["categoria_busca"] != categoria_principal].copy()
+        if not candidatos_complementares.empty:
+            candidatos = candidatos_complementares
+
+        if candidatos.empty:
+            continue
+
+        candidatos["mesma_loja"] = (
+            candidatos["loja"].str.lower() == loja_principal.lower()
+        ) & bool(loja_principal)
+        candidatos = candidatos.sort_values(
+            by=["mesma_loja", "preco", "produto", "loja"],
+            ascending=[False, True, True, True],
+        ).reset_index(drop=True)
+
+        recomendado = candidatos.iloc[0]
+        mesma_loja = bool(recomendado["mesma_loja"])
+        preco_principal = float(principal.get("preco") or 0)
+        preco_recomendado = float(recomendado["preco"])
+        criterio = (
+            "Produto complementar na mesma loja, priorizando menor preço total e possivel economia de frete."
+            if mesma_loja
+            else "Produto complementar mais barato encontrado em outra loja."
+        )
+
+        resultados.append(
+            {
+                "termo_principal": termo_principal,
+                "produto_principal": produto_principal,
+                "categoria_principal": categoria_principal,
+                "loja_principal": loja_principal,
+                "preco_principal": preco_principal,
+                "link_principal": limpar_texto(principal.get("link")),
+                "termo_recomendado": recomendado["termo_busca"],
+                "produto_recomendado": recomendado["produto"],
+                "categoria_recomendada": recomendado["categoria_busca"],
+                "loja_recomendada": recomendado["loja"],
+                "preco_recomendado": preco_recomendado,
+                "link_recomendado": recomendado["link"],
+                "preco_total_combo": round(preco_principal + preco_recomendado, 2),
+                "economia_frete": "sim" if mesma_loja else "nao",
+                "criterio_recomendacao": criterio,
+                "data_analise": agora_str(),
+            }
+        )
+
+    return pd.DataFrame(resultados, columns=colunas_saida)
+
+
 def montar_payload_ml(item: pd.Series) -> dict[str, Any]:
     """Monta o payload esperado pela FastAPI de predicao."""
     return {
@@ -464,9 +647,22 @@ def montar_payload_ml(item: pd.Series) -> dict[str, Any]:
 
 def chamar_api_ml(item: pd.Series) -> dict[str, Any]:
     """Consulta a API local e devolve a decisao do modelo."""
-    resposta = requests.post(ML_API_URL, json=montar_payload_ml(item), timeout=10)
+    payload = montar_payload_ml(item)
+    print(
+        "[ML] POST /predict "
+        f"termo={payload.get('termo_busca')!r} "
+        f"loja={payload.get('loja')!r} "
+        f"preco={payload.get('preco')}"
+    )
+    resposta = requests.post(ML_API_URL, json=payload, timeout=10)
     resposta.raise_for_status()
-    return resposta.json()
+    predicao = resposta.json()
+    print(
+        "[ML] Resposta do modelo "
+        f"classe={predicao.get('classe')} "
+        f"probabilidade_vale_comprar={predicao.get('probabilidade_vale_comprar')}"
+    )
+    return predicao
 
 
 def aplicar_predicoes_ml(df_melhores: pd.DataFrame) -> pd.DataFrame:
@@ -483,7 +679,7 @@ def aplicar_predicoes_ml(df_melhores: pd.DataFrame) -> pd.DataFrame:
             df.at[indice, "probabilidade_vale_comprar"] = predicao.get("probabilidade_vale_comprar")
             df.at[indice, "justificativa_ml"] = predicao.get("justificativa", "")
             print(
-                "[ML] "
+                "[ML] Decisao aplicada "
                 f"{item.get('termo_busca')}: "
                 f"{predicao.get('classe')} "
                 f"prob={predicao.get('probabilidade_vale_comprar')}"
@@ -495,6 +691,24 @@ def aplicar_predicoes_ml(df_melhores: pd.DataFrame) -> pd.DataFrame:
             print(f"[AVISO] Falha ao consultar API ML para {item.get('termo_busca')}: {e}")
 
     return df
+
+
+def imprimir_resumo_predicoes(df_melhores: pd.DataFrame) -> None:
+    """Mostra um resumo simples das predicoes geradas pela API ML."""
+    if df_melhores.empty or "recomendacao_ml" not in df_melhores.columns:
+        print("[RESUMO ML] Nenhuma predicao disponivel para resumir.")
+        return
+
+    contagem = df_melhores["recomendacao_ml"].fillna("sem_predicao").value_counts()
+    total = int(contagem.sum())
+
+    print("[RESUMO ML] Predicoes por classe:")
+    for classe, quantidade in contagem.items():
+        print(f"[RESUMO ML] - {classe}: {int(quantidade)}")
+
+    classe_majoritaria = str(contagem.idxmax()) if total else "sem_predicao"
+    print(f"[RESUMO ML] Total de itens com decisao: {total}")
+    print(f"[RESUMO ML] Predicao majoritaria: {classe_majoritaria}")
 
 
 # =========================
@@ -551,6 +765,29 @@ def escrever_aba_melhores_precos(gs, df: pd.DataFrame) -> None:
     escrever_aba(gs, ABA_MELHORES_PRECOS, df, colunas)
 
 
+def escrever_aba_compre_junto(gs, df: pd.DataFrame) -> None:
+    """Escreve recomendacoes de compra combinada na planilha."""
+    colunas = [
+        "termo_principal",
+        "produto_principal",
+        "categoria_principal",
+        "loja_principal",
+        "preco_principal",
+        "link_principal",
+        "termo_recomendado",
+        "produto_recomendado",
+        "categoria_recomendada",
+        "loja_recomendada",
+        "preco_recomendado",
+        "link_recomendado",
+        "preco_total_combo",
+        "economia_frete",
+        "criterio_recomendacao",
+        "data_analise",
+    ]
+    escrever_aba(gs, ABA_COMPRE_JUNTO, df, colunas)
+
+
 # =========================
 # ARTIFACTS / SAÍDAS
 # =========================
@@ -560,6 +797,15 @@ def salvar_resumo_json(df_melhores: pd.DataFrame) -> None:
     dados = df_melhores.fillna("").to_dict(orient="records")
 
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(dados, f, ensure_ascii=False, indent=2)
+
+
+def salvar_combos_json(df_compre_junto: pd.DataFrame) -> None:
+    """Salva em disco as recomendacoes de compra combinada."""
+    garantir_pasta(ARTIFACTS_DIR)
+    dados = df_compre_junto.fillna("").to_dict(orient="records")
+
+    with open(OUTPUT_COMBOS_JSON, "w", encoding="utf-8") as f:
         json.dump(dados, f, ensure_ascii=False, indent=2)
 
 
@@ -597,32 +843,75 @@ def main() -> None:
         df_coleta = montar_dataframe_coleta(registros)
         df_melhores = montar_dataframe_melhores_por_termo(df_coleta)
         df_melhores = aplicar_predicoes_ml(df_melhores)
+        imprimir_resumo_predicoes(df_melhores)
+        df_compre_junto = montar_dataframe_compre_junto(df_coleta, df_melhores)
 
         print(f"[INFO] Linhas na coleta_bruta: {len(df_coleta)}")
         print(f"[INFO] Linhas em melhores_precos: {len(df_melhores)}")
+        print(f"[INFO] Linhas em compre_junto: {len(df_compre_junto)}")
 
-        gs = iniciar_google_sheets(maestro)
+        gs = executar_com_timeout(
+            iniciar_google_sheets,
+            TIMEOUT_SHEETS_SEGUNDOS,
+            "inicializacao do Google Sheets",
+            maestro,
+        )
 
         print("Escrevendo aba coleta_bruta...")
-        escrever_aba_coleta_bruta(gs, df_coleta)
+        executar_com_timeout(
+            escrever_aba_coleta_bruta,
+            TIMEOUT_SHEETS_SEGUNDOS,
+            "escrita da aba coleta_bruta",
+            gs,
+            df_coleta,
+        )
 
         print("Escrevendo aba melhores_precos...")
-        escrever_aba_melhores_precos(gs, df_melhores)
+        executar_com_timeout(
+            escrever_aba_melhores_precos,
+            TIMEOUT_SHEETS_SEGUNDOS,
+            "escrita da aba melhores_precos",
+            gs,
+            df_melhores,
+        )
+
+        print("Escrevendo aba compre_junto...")
+        executar_com_timeout(
+            escrever_aba_compre_junto,
+            TIMEOUT_SHEETS_SEGUNDOS,
+            "escrita da aba compre_junto",
+            gs,
+            df_compre_junto,
+        )
 
         salvar_resumo_json(df_melhores)
         print(f"[OK] Resumo salvo em: {OUTPUT_JSON}")
+        salvar_combos_json(df_compre_junto)
+        print(f"[OK] Resumo de compre junto salvo em: {OUTPUT_COMBOS_JSON}")
 
         total_items = contar_termos_disponiveis(df_coleta)
         processed_items = len(df_melhores)
         failed_items = max(total_items - processed_items, 0)
 
         try:
-            maestro.post_artifact(
+            executar_com_timeout(
+                maestro.post_artifact,
+                TIMEOUT_ARTIFACT_SEGUNDOS,
+                "envio do artifact analise_resumo.json",
                 task_id=execution.task_id,
                 artifact_name="analise_resumo.json",
                 filepath=str(OUTPUT_JSON),
             )
             print("[OK] Artifact da analise enviado ao Maestro.")
+            executar_com_timeout(
+                maestro.post_artifact,
+                TIMEOUT_ARTIFACT_SEGUNDOS,
+                "envio do artifact compre_junto_resumo.json",
+                task_id=execution.task_id,
+                artifact_name="compre_junto_resumo.json",
+                filepath=str(OUTPUT_COMBOS_JSON),
+            )
+            print("[OK] Artifact de compre junto enviado ao Maestro.")
         except Exception as e:
             print(f"[AVISO] Erro ao enviar artifact da analise: {e}")
 
@@ -630,6 +919,12 @@ def main() -> None:
             print(f"Planilha: {gs.get_spreadsheet_link()}")
         except Exception:
             pass
+
+        print("[RESUMO EXECUCAO] Analise concluida.")
+        print(f"[RESUMO EXECUCAO] Itens lidos da coleta: {len(registros)}")
+        print(f"[RESUMO EXECUCAO] Termos processados: {processed_items}/{total_items}")
+        print(f"[RESUMO EXECUCAO] Recomendacoes compre_junto: {len(df_compre_junto)}")
+        imprimir_resumo_predicoes(df_melhores)
 
         if total_items == 0:
             finalizar_task(

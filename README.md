@@ -1,275 +1,316 @@
-# 🌿 GlowWise Skincare
+# GlowWise Skincare
 
-## 📌 Descrição do Projeto
+O GlowWise Skincare é um sistema de automação com Machine Learning para monitorar precos de produtos de skincare, analisar oportunidades e enviar alertas de compra.
 
-O **GlowWise Skincare** é um sistema de automação desenvolvido em **Python**, utilizando o **BotCity Framework Web** para automação de navegação e coleta de dados, e o **BotCity Maestro** para orquestração, gerenciamento de execuções, armazenamento de dados (DataPool) e envio de alertas. Com o objetivo de monitorar preços de produtos de skincare em diferentes lojas online, registrar histórico de valores, analisar variações e enviar alertas personalizados.
+O projeto evolui o bot original de RPA para um fluxo com decisão baseada em ML. Em vez de apenas aplicar regras fixas, o bot coleta dados, prepara um dataset, consulta um modelo classificador **vale_comprar** / **nao_vale_comprar** e usa essa predição para enriquecer a análise e o alerta ao usuário.
 
-A proposta do sistema é apoiar decisões de compra mais conscientes, automatizando tarefas repetitivas de acompanhamento de preços e reduzindo a necessidade de consultas manuais constantes.
+## Problema
 
----
+Acompanhar produtos de skincare em lojas online é uma tarefa repetitiva, sujeita a comparações manuais e decisões impulsivas. O GlowWise automatiza esse processo para:
 
-## 💡 Problema
+- coletar produtos e preços em lojas online;
+- limpar e organizar os dados coletados;
+- identificar melhores ofertas por termo de busca;
+- recomendar se uma oferta vale comprar com apoio de ML;
+- recomendar produtos complementares para compra combinada, priorizando menor total e possivel economia de frete;
+- enviar alerta com resultado da análise.
 
-Acompanhar preços de produtos de skincare em múltiplas lojas é um processo:
+## Arquitetura
 
-- repetitivo
-- desorganizado
-- demorado
-- sujeito a decisões impulsivas
-
-O projeto resolve esse problema automatizando a coleta, organização e análise dos dados, além de notificar o usuário quando surgirem boas oportunidades.
-
----
-
-## 🎯 Objetivo Geral
-
-Desenvolver um conjunto de bots utilizando o ecossistema BotCity para monitorar produtos de skincare, registrar histórico de preços, analisar variações e enviar alertas personalizados.
-
----
-
-## ✅ Objetivos Específicos
-
-- Coletar automaticamente dados de produtos em lojas online
-- Armazenar e manter histórico de preços
-- Comparar preços atuais com dados anteriores
-- Identificar variações relevantes
-- Enviar alertas quando condições definidas forem atendidas
-
----
-
-## 🧠 Arquitetura do Projeto
-
-O sistema é composto por **3 bots independentes**, organizados em pastas separadas:
-
-### 🤖 Bot de Coleta
-
-Responsável por:
-
-- Acessar os sites (ex.: Drogasil e Beleza na Web)
-- Extrair nome, preço e link dos produtos
-- Armazenar os dados coletados
-- Enviar dados ao DataPool
-
-### 🤖 Bot de Análise
-
-Responsável por:
-
-- Ler os dados coletados
-- Comparar preços com histórico
-- Identificar variações relevantes
-- Selecionar melhores oportunidades
-
-### 🤖 Bot de Alerta
-
-Responsável por:
-
-- Processar os dados analisados
-- Identificar condições de alerta
-- Enviar notificações (ex.: Telegram)
-
----
-
-## 📂 Estrutura do Projeto
+O projeto possui três bots no ecossistema BotCity e uma camada local de Machine Learning:
 
 ```text
-GlowWise Skincare/
-│
-├── bot_coleta_skincare/
-│   ├── bot.py
-│   ├── coleta.py
-│   ├── requirements.txt
-│   └── demais arquivos
-│
-├── bot_analise_skincare/
-│   ├── bot.py
-│   ├── analise.py
-│   ├── requirements.txt
-│   └── demais arquivos
-│
-├── bot_alerta_skincare/
-│   ├── bot.py
-│   ├── alerta.py
-│   ├── requirements.txt
-│   └── demais arquivos
-│
-└── README.md
+Bot de Coleta -> DataPool -> Bot de Analise -> FastAPI ML -> Google Sheets -> Bot de Alerta -> Telegram
 ```
-
-📌 Cada bot possui seu próprio `bot.py`, conforme exigido pelo Runner do BotCity Maestro.
-
----
-
-## ⚙️ Tecnologias Utilizadas
-
-- Python 3
-- BotCity Framework Web
-- BotCity Maestro
-- DataPool
-- Credentials Vault
-- JSON
-- Telegram API (para alertas)
-- Google Sheets (opcional)
-
----
-
-## 🔐 Configuração do Ambiente
-
-### 1. Criar ambiente virtual
-
-```bash
-python -m venv .venv
-```
-
-### 2. Ativar ambiente
-
-**Windows (PowerShell):**
-
-```bash
-.venv\Scripts\activate
-```
-
-**Linux/Mac:**
-
-```bash
-source .venv/bin/activate
-```
-
-### 3. Instalar dependências
-
-```bash
-pip install botcity-framework-web
-pip install botcity-maestro-sdk
-pip install python-dotenv
-```
-
----
-
-## 🔑 Configuração do Maestro
-
-Crie um arquivo `.env` na raiz do projeto:
-
-```env
-MAESTRO_SERVER=seu_servidor
-MAESTRO_LOGIN=seu_login
-MAESTRO_KEY=sua_chave
-```
-
-⚠️ **Importante:** não versionar esse arquivo no repositório.
-
----
-
-## 🔐 Credentials Vault
-
-Credenciais sensíveis, como token do Telegram, devem ser armazenadas no **Credentials Vault do Maestro**, e não diretamente no código.
-
----
-
-## ▶️ Execução Local
-
-Cada bot pode ser executado individualmente.
 
 ### Bot de Coleta
 
-```bash
-cd bot_coleta_skincare
-python bot.py
-```
+Pasta: `bot_coleta_skincare/`
+
+Responsável por:
+
+- acessar Drogasil e Beleza na Web com BotCity Framework Web;
+- coletar produto, preço, loja, termo de busca e link;
+- limpar links de redirecionadores, como Criteo;
+- salvar *coleta.json*;
+- enviar registros para o DataPool do BotCity Maestro.
 
 ### Bot de Análise
 
-```bash
-cd bot_analise_skincare
-python bot.py
-```
+Pasta: `bot_analise_skincare/`
+
+Responsável por:
+
+- consumir os registros do DataPool;
+- selecionar a melhor oferta por termo de busca;
+- montar recomendacoes "compre junto" com produtos diferentes que combinam entre si;
+- chamar a API local de ML em *POST /predict*;
+- registrar *recomendacao_ml*, *probabilidade_vale_comprar* e *justificativa_ml*;
+- escrever as abas *coleta_bruta*, *melhores_precos* e *compre_junto* no Google Sheets;
+- publicar *analise_resumo.json* e *compre_junto_resumo.json* como artifacts.
 
 ### Bot de Alerta
 
-```bash
-cd bot_alerta_skincare
-python bot.py
-```
+Pasta: `bot_alerta_skincare/`
 
----
+Responsável por:
 
-## ☁️ Execução no BotCity Maestro
+- ler a aba *melhores_precos*;
+- ler a aba *compre_junto*;
+- montar uma mensagem com preço, link e decisão do modelo;
+- incluir recomendacoes de compra combinada na mensagem;
+- enviar alerta via Telegram;
+- publicar relatório TXT como artifact.
 
-Para execução no Maestro:
+### API de Machine Learning
 
-- Cada bot deve ser empacotado separadamente
-- O arquivo principal deve se chamar `bot.py`
-- Os bots devem ser registrados com labels no padrão:
+Pasta: `api/`
+
+Endpoints:
+
+- *GET /saude*: verifica se a API está ativa;
+- *POST /predict*: recebe dados de um produto e retorna a recomendação.
+
+Modelo carregado:
 
 ```text
-nomedoaluno-nomedobot-versao
+models:/glowwise-vale-comprar@production
 ```
 
-### Exemplo
+## Machine Learning
+
+O problema foi modelado como uma recomendação baseada em classificação binária:
 
 ```text
-rebeca-coleta-v1
-rebeca-analise-v1
-rebeca-alerta-v1
+0 -> nao_vale_comprar
+1 -> vale_comprar
 ```
 
----
+Features usadas:
 
-## 📊 DataPool
+- *texto_produto*: produto, marca, termo de busca e texto original;
+- *categoria_busca*;
+- *loja*;
+- *preco*.
 
-O DataPool é utilizado para:
+Pipeline:
 
-- armazenar dados coletados
-- alimentar o bot de análise
-- controlar o status dos registros
+- *TfidfVectorizer* para texto;
+- *OneHotEncoder* para variáveis categóricas;
+- *StandardScaler* para preço;
+- *Pipeline + ColumnTransformer* do scikit-learn.
 
----
+Modelos comparados no MLflow:
 
-## 📁 Arquivos de Resultado
+- Logistic Regression;
+- Random Forest;
+- Gradient Boosting.
 
-Os bots geram arquivos que são enviados ao Maestro, como:
+O melhor modelo é promovido no MLflow Registry com alias @production.
 
-- JSONs
-- logs
-- relatórios
-- planilhas ou screenshots (opcional)
+## DVC e Evidently
 
-### Exemplo de envio
+O projeto usa DVC para versionar datasets e artefatos principais da pipeline:
 
-```python
-maestro.post_artifact("arquivo.json")
+- data/raw/produtos_coletados_historico.csv;
+- data/processed/produtos_sanitizados.csv;
+- data/processed/produtos_ml.csv;
+- mlflow.db;
+- mlruns/;
+- reports/evidently/relatorio_drift.html.
+
+O relatório de drift é gerado com Evidently AI em:
+
+```text
+reports/evidently/relatorio_drift.html
 ```
 
----
+## Organização dos Dados
 
-## 🔔 Alertas
+O projeto separa os dados em camadas para manter rastreabilidade e evitar misturar coleta bruta com dados prontos para ML:
 
-O sistema envia notificações quando:
+```text
+data/raw/execucoes/
+```
 
-- um produto atinge o preço desejado
-- há uma variação significativa
+Guarda arquivos de coletas individuais. Essa pasta serve para auditoria e comparação entre execuções.
 
----
+```text
+data/raw/produtos_coletados_historico.csv
+```
 
-## 🚫 Limitações do Projeto
+Histórico bruto consolidado. Reúne os registros coletados pelo bot antes da sanitização final.
 
-- Não realiza compras
-- Não funciona como e-commerce
-- Não armazena dados sensíveis de usuários
+```text
+data/processed/produtos_sanitizados.csv
+```
 
----
+Dataset limpo para análise exploratória e transformações de ML.
 
-## 📌 Requisitos do Desafio Atendidos
+```text
+data/processed/produtos_ml.csv
+```
 
-- ✔ Mínimo de 3 bots
-- ✔ Uso do BotCity Framework Web
-- ✔ Integração com Maestro
-- ✔ Uso de DataPool
-- ✔ Uso de Credentials Vault
-- ✔ Geração de artefatos
-- ✔ Automação real (web scraping + alerta)
-- ✔ README detalhado
+Dataset usado no treino, já com features auxiliares e rótulo *vale_comprar*.
 
----
+Na execução do modelo, o arquivo mais importante é o **produtos_ml.csv**. As demais camadas existem para rastrear como o dado chegou até ele.
 
-## 🚀 Conclusão
+## Notebooks e Scripts
 
-O GlowWise Skincare demonstra como a automação pode ser aplicada para resolver problemas do dia a dia, tornando o monitoramento de preços mais eficiente, organizado e útil para decisões de compra mais conscientes.
+Os notebooks não são usados para executar o bot em produção. Eles funcionam como documentação técnica da análise:
+
+- notebooks/01_eda.ipynb: documenta a exploração dos dados, problemas de qualidade e decisão de limpeza.
+- notebooks/02_modelagem.ipynb: documenta a modelagem, comparação dos algoritmos e escolha do modelo.
+
+Os scripts são a execução oficial e reproduzível:
+
+- `ml/gerar_dataset.py`;
+- `ml/treinar_modelo.py`;
+- `ml/gerar_relatorio_modelo.py`;
+- `ml/gerar_relatorio_drift.py`;
+- `api/main.py`;
+- bots em `bot_*_skincare/`.
+
+## Estrutura
+
+```text
+GlowWise Skincare/
+|-- api/
+|   `-- main.py
+|-- bot_alerta_skincare/
+|   |-- bot.py
+|   |-- alerta.py
+|   `-- requirements.txt
+|-- bot_analise_skincare/
+|   |-- bot.py
+|   |-- analise.py
+|   |-- utils.py
+|   `-- requirements.txt
+|-- bot_coleta_skincare/
+|   |-- bot.py
+|   |-- coleta.py
+|   |-- utils.py
+|   `-- requirements.txt
+|-- data/
+|   |-- raw/
+|   `-- processed/
+|-- dist_botcity/
+|   |-- coleta.zip
+|   |-- analise.zip
+|   `-- alerta.zip
+|-- ml/
+|   |-- gerar_dataset.py
+|   |-- treinar_modelo.py
+|   |-- gerar_relatorio_modelo.py
+|   `-- gerar_relatorio_drift.py
+|-- notebooks/
+|   |-- 01_eda.ipynb
+|   `-- 02_modelagem.ipynb
+|-- reports/
+|   `-- evidently/
+|-- dvc.yaml
+|-- dvc.lock
+|-- LICENSE
+|-- REPOSITORIO.md
+`-- README.md
+```
+
+## Instalação Local
+
+Crie e ative o ambiente virtual:
+
+```powershell
+python -m venv .ml-glowwise
+.\.ml-glowwise\Scripts\activate
+```
+
+Instale as dependencias:
+
+```powershell
+pip install -r requirements.txt
+```
+
+## Execução da Pipeline de Dados e ML
+
+Gerar datasets:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py --from-execucoes
+```
+
+Treinar modelos e registrar no MLflow:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe ml\treinar_modelo.py
+```
+
+Gerar relatório Evidently:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_drift.py
+```
+
+Gerar graficos de avaliacao do modelo:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_modelo.py
+```
+
+Reproduzir tudo com DVC:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe -m dvc repro
+```
+
+Verificar status DVC:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe -m dvc status
+```
+
+## Subir a API Local
+
+Antes de executar o bot de analise, suba a API:
+
+```powershell
+.\.ml-glowwise\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+Rotas:
+
+```text
+GET  http://127.0.0.1:8000/saude
+POST http://127.0.0.1:8000/predict
+DOCS http://127.0.0.1:8000/docs
+```
+
+## Execução no BotCity
+
+Ordem de execucao:
+
+```text
+1. coleta
+2. analise
+3. alerta
+```
+
+O bot de análise depende da API ML em execução. Se o Runner estiver na mesma máquina, use:
+
+```text
+http://127.0.0.1:8000/predict
+```
+
+Se estiver em outra máquina, use o IP do servidor da API.
+
+## Credentials Vault
+
+Credenciais sensíveis não devem ser versionadas.
+
+## Limitacoes
+
+- O modelo inicial usa uma base pequena, portanto os resultados devem ser interpretados como primeira versão funcional do pipeline.
+- O bot não realiza compra automaticamente.
+- O projeto não coleta dados pessoais.
+- A API ML precisa estar disponível antes da execução do bot de análise.
+
+> **Propriedade Intelectual:** Este projeto e todo o seu código-fonte, automações e artefatos são de propriedade da LG Electronics do Brasil Ltda., desenvolvido no âmbito do projeto AX Academy --- Digital Transformation (Convênio N.º 005/2025 --- INOVA / IFAM). Consulte o arquivo LICENSE para mais detalhes.
