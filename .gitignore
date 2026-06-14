@@ -12,3 +12,4 @@ data/raw/execucoes/*.csv
 /mlflow.db
 /mlruns
 /data
+/docs/ROTEIRO_SLIDES_DESAFIO02.md
