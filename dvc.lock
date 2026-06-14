@@ -1,57 +1,58 @@
 schema: '2.0'
 stages:
   gerar_dataset:
-    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py --from-execucoes
     deps:
-    - path: bot_coleta_skincare/artifacts/coleta/coleta.json
+    - path: data/raw/execucoes
       hash: md5
-      md5: 8158f7575746a7ffebca66620440700a
-      size: 17641
+      md5: dbf115920908ae135f962494943a1ddb.dir
+      size: 42556
+      nfiles: 3
     - path: ml/gerar_dataset.py
       hash: md5
-      md5: e8b71d4c8854bc9a44649a733d2fc817
-      size: 8483
+      md5: 91aa7a9deaf1234181341a86f1ba1088
+      size: 11374
     outs:
     - path: data/processed/produtos_sanitizados.csv
       hash: md5
-      md5: ee4793b4c99bc258bdb34dcdf207ef50
-      size: 22860
+      md5: c62e15f43cad7267ee0c96eb745e3b4c
+      size: 71046
     - path: data/raw/produtos_coletados_historico.csv
       hash: md5
-      md5: 4a37fd1745e31a4b4de8fa5f889d14b1
-      size: 13060
+      md5: fd6fc3adbbc0cffe9ad187d003263bee
+      size: 42470
   treinar_modelo:
     cmd: .\.ml-glowwise\Scripts\python.exe ml\treinar_modelo.py
     deps:
     - path: data/processed/produtos_sanitizados.csv
       hash: md5
-      md5: ee4793b4c99bc258bdb34dcdf207ef50
-      size: 22860
+      md5: c62e15f43cad7267ee0c96eb745e3b4c
+      size: 71046
     - path: ml/treinar_modelo.py
       hash: md5
-      md5: 977c527708eab35015e7919cd5822e98
-      size: 8315
+      md5: c513f1a516b61e2440610d91f1f5de48
+      size: 8323
     outs:
     - path: data/processed/produtos_ml.csv
       hash: md5
-      md5: bea47cb52bfd0addb199ee5cb8d4f4c2
-      size: 31730
+      md5: 9106f2a5dbc9e602dc61e736f3acd6d1
+      size: 92933
     - path: mlflow.db
       hash: md5
-      md5: 37ebbcbd65d7e9d1fc2016aed59cc626
+      md5: 35b6209b1533d4039b2981b6941c4d73
       size: 712704
     - path: mlruns
       hash: md5
-      md5: b1213a446294e042ddbcad83f4760cfa.dir
-      size: 447647
+      md5: 989157bade648daa5c011969abd59b22.dir
+      size: 824846
       nfiles: 24
   gerar_relatorio_drift:
     cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_drift.py
     deps:
     - path: data/processed/produtos_ml.csv
       hash: md5
-      md5: bea47cb52bfd0addb199ee5cb8d4f4c2
-      size: 31730
+      md5: 9106f2a5dbc9e602dc61e736f3acd6d1
+      size: 92933
     - path: ml/gerar_relatorio_drift.py
       hash: md5
       md5: 7c990a83504b56317566c5c4432a465a
@@ -59,5 +60,101 @@ stages:
     outs:
     - path: reports/evidently/relatorio_drift.html
       hash: md5
-      md5: b46ce105f89c8235ccc24f98ecfe655a
-      size: 3776500
+      md5: d955f59346ba1d75c56ac3f3f27e3423
+      size: 3809122
+  gerar_relatorio_modelo:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_modelo.py
+    deps:
+    - path: data/processed/produtos_ml.csv
+      hash: md5
+      md5: 9106f2a5dbc9e602dc61e736f3acd6d1
+      size: 92933
+    - path: ml/gerar_relatorio_modelo.py
+      hash: md5
+      md5: 83b88d8f30ee20c3dffdfa68c3e5aad9
+      size: 8737
+    - path: ml/treinar_modelo.py
+      hash: md5
+      md5: c513f1a516b61e2440610d91f1f5de48
+      size: 8323
+    outs:
+    - path: reports/modelo/comparacao_metricas.png
+      hash: md5
+      md5: 0bc8af217208b678cff056171e614643
+      size: 54455
+    - path: reports/modelo/curva_loss_treino_validacao_gradient_boosting.png
+      hash: md5
+      md5: 3e10e87c94fb3990f7482e667a59c5e3
+      size: 65785
+    - path: reports/modelo/curva_treino_validacao_random_forest.png
+      hash: md5
+      md5: 3e10e87c94fb3990f7482e667a59c5e3
+      size: 65785
+    - path: reports/modelo/matriz_confusao_gradient_boosting.png
+      hash: md5
+      md5: 7c6c4fd9061efdd394f1fc253c034e5e
+      size: 28651
+    - path: reports/modelo/matriz_confusao_logistic_regression.png
+      hash: md5
+      md5: 6586f178b476de5ba150feb6fc0910cf
+      size: 28893
+    - path: reports/modelo/matriz_confusao_random_forest.png
+      hash: md5
+      md5: 026133b3e9bab8b215129667581eaaef
+      size: 28057
+    - path: reports/modelo/metricas_modelos.csv
+      hash: md5
+      md5: 95d9264d77d536a4c0d2fc82d5708c20
+      size: 427
+    - path: reports/modelo/pr_modelos.png
+      hash: md5
+      md5: 669b51f145361e51eb5802c56b8e87a6
+      size: 51700
+    - path: reports/modelo/resumo_modelo.md
+      hash: md5
+      md5: 4960b46e62af9c0dd05db9048c1b4e0d
+      size: 1065
+    - path: reports/modelo/roc_modelos.png
+      hash: md5
+      md5: 8ad155679422d32c108260514e659702
+      size: 71001
+  gerar_relatorio_eda:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_eda.py
+    deps:
+    - path: data/processed/produtos_ml.csv
+      hash: md5
+      md5: 9106f2a5dbc9e602dc61e736f3acd6d1
+      size: 92933
+    - path: data/processed/produtos_sanitizados.csv
+      hash: md5
+      md5: c62e15f43cad7267ee0c96eb745e3b4c
+      size: 71046
+    - path: data/raw/produtos_coletados_historico.csv
+      hash: md5
+      md5: fd6fc3adbbc0cffe9ad187d003263bee
+      size: 42470
+    - path: ml/gerar_relatorio_eda.py
+      hash: md5
+      md5: 56ccbffdc6995c611ea306209af9e2d2
+      size: 5293
+    outs:
+    - path: reports/eda/distribuicao_alvo.png
+      hash: md5
+      md5: 3d350e3824133d87717935db08092c1d
+      size: 38027
+    - path: reports/eda/distribuicao_categorias.png
+      hash: md5
+      md5: 3874867f9bd70345ecc289d46dc9ba38
+      size: 41072
+    - path: reports/eda/distribuicao_lojas.png
+      hash: md5
+      md5: 8f388ab456cb0faf1be9ea7a68f876af
+      size: 34788
+    - path: reports/eda/precos_por_categoria.png
+      hash: md5
+      md5: 78ee8c7e978c936a4dcef1270f58452d
+      size: 45338
+    - path: reports/eda/resumo_eda.md
+      hash: md5
+      md5: 2cffe2691ecc60122ee8171dac763b34
+      size: 1995

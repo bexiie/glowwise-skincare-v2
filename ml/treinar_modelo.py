@@ -62,7 +62,7 @@ def preparar_dataset(caminho: Path) -> pd.DataFrame:
     ]
     faltantes = [coluna for coluna in colunas_obrigatorias if coluna not in df.columns]
     if faltantes:
-        raise ValueError(f"Dataset sem colunas obrigatorias: {faltantes}")
+        raise ValueError(f"Dataset sem colunas obrigatórias: {faltantes}")
 
     df = df.copy()
     df["preco"] = pd.to_numeric(df["preco"], errors="coerce")
@@ -155,7 +155,7 @@ def promover_modelo(run_id: str, model_name: str) -> None:
             break
 
     if versao_vencedora is None:
-        raise RuntimeError(f"Nao encontrei versao registrada para run_id={run_id}.")
+        raise RuntimeError(f"Não encontrei versão registrada para run_id={run_id}.")
 
     client.set_registered_model_alias(model_name, "production", versao_vencedora)
     print(f"Modelo promovido: {model_name} versao {versao_vencedora} alias @production")
@@ -172,7 +172,7 @@ def treinar(args: argparse.Namespace) -> None:
     y = df[TARGET]
 
     if y.nunique() < 2:
-        raise ValueError("A rotulagem gerou apenas uma classe. Ajuste a heuristica antes do treino.")
+        raise ValueError("A rotulagem gerou apenas uma classe. Ajuste a heurística antes do treino.")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -241,9 +241,9 @@ def treinar(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Treina e registra o modelo de recomendacao GlowWise.")
+    parser = argparse.ArgumentParser(description="Treina e registra o modelo de recomendação GlowWise.")
     parser.add_argument("--dataset", type=Path, default=DATASET_PATH, help="CSV processado usado no treino.")
-    parser.add_argument("--test-size", type=float, default=0.25, help="Proporcao de teste.")
+    parser.add_argument("--test-size", type=float, default=0.25, help="Proporção de teste.")
     return parser.parse_args()
 
 

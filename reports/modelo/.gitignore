@@ -1,0 +1,10 @@
+/metricas_modelos.csv
+/comparacao_metricas.png
+/roc_modelos.png
+/matriz_confusao_random_forest.png
+/matriz_confusao_logistic_regression.png
+/matriz_confusao_gradient_boosting.png
+/resumo_modelo.md
+/pr_modelos.png
+/curva_treino_validacao_random_forest.png
+/curva_loss_treino_validacao_gradient_boosting.png

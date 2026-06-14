@@ -156,6 +156,24 @@ def remover_trechos_preco(texto):
     return texto
 
 
+def extrair_preco_promocional(produto_original, preco_atual):
+    """Prioriza o preco de venda anunciado no texto bruto do produto."""
+    texto = limpar_texto(produto_original) or ""
+    padrao_preco = r"R\$\s*(\d+(?:\.\d{3})*,\d{2})"
+    padroes_promocionais = [
+        rf"\bpor\s*{padrao_preco}",
+        rf"{padrao_preco}\s*(?:a|Ã |à)\s*vista",
+        rf"pix\s*{padrao_preco}",
+    ]
+
+    for padrao in padroes_promocionais:
+        match = re.search(padrao, texto, flags=re.IGNORECASE)
+        if match:
+            return float(match.group(1).replace(".", "").replace(",", "."))
+
+    return preco_atual
+
+
 def limpar_produto(produto):
     texto = limpar_texto(produto)
     if texto is None:
@@ -197,6 +215,7 @@ def sanitizar_dataset(df_raw):
 
     df["produto_original"] = df["produto"]
     df["link_original"] = df["link"]
+    df["preco"] = df.apply(lambda row: extrair_preco_promocional(row["produto_original"], row["preco"]), axis=1)
     df["link"] = df["link_original"].apply(limpar_link)
     df["link_canonico"] = df["link"].apply(canonicalizar_link)
     df["produto"] = df["produto_original"].apply(limpar_produto)
@@ -267,25 +286,77 @@ def salvar_dataset(df_execucao, append_historico):
     return execucao_path, RAW_HISTORICO_PATH, PROCESSED_PATH, len(df_execucao), len(df_raw), len(df_processado)
 
 
+def carregar_execucoes_csv():
+    arquivos = sorted(EXECUCOES_DIR.glob("produtos_coletados_*.csv"))
+    if not arquivos:
+        raise FileNotFoundError(f"Nenhum CSV de execucao encontrado em {EXECUCOES_DIR}.")
+
+    dataframes = []
+    for arquivo in arquivos:
+        df = pd.read_csv(arquivo)
+        for coluna in RAW_COLUMNS:
+            if coluna not in df.columns:
+                df[coluna] = None
+        dataframes.append(df[RAW_COLUMNS])
+
+    df_raw = pd.concat(dataframes, ignore_index=True)
+    df_raw["produto"] = df_raw["produto"].apply(limpar_texto)
+    df_raw["termo_busca"] = df_raw["termo_busca"].apply(limpar_texto).str.lower()
+    df_raw["categoria_busca"] = df_raw["categoria_busca"].apply(limpar_texto).str.lower()
+    df_raw["loja"] = df_raw["loja"].apply(limpar_texto)
+    df_raw["link"] = df_raw["link"].apply(limpar_texto)
+    df_raw["preco"] = pd.to_numeric(df_raw["preco"], errors="coerce")
+    df_raw["data_coleta"] = pd.to_datetime(df_raw["data_coleta"], errors="coerce")
+    df_raw["disponivel"] = df_raw["disponivel"].fillna(True).astype(bool)
+    return df_raw.drop_duplicates().reset_index(drop=True)
+
+
+def salvar_dataset_de_execucoes():
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+    df_raw = carregar_execucoes_csv()
+    df_raw.to_csv(RAW_HISTORICO_PATH, index=False, encoding="utf-8-sig")
+
+    df_processado = sanitizar_dataset(df_raw)
+    df_processado.to_csv(PROCESSED_PATH, index=False, encoding="utf-8-sig")
+
+    return RAW_HISTORICO_PATH, PROCESSED_PATH, len(df_raw), len(df_processado)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Gera datasets raw e processed a partir do coleta.json.")
     parser.add_argument("--json", type=Path, default=DEFAULT_JSON_PATH, help="Caminho do coleta.json.")
     parser.add_argument(
+        "--from-execucoes",
+        action="store_true",
+        help="Reconstrói o histórico usando todos os CSVs em data/raw/execucoes.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Recria o historico bruto apenas com a coleta atual. Por padrao, acrescenta ao historico.",
+        help="Recria o histórico bruto apenas com a coleta atual. Por padrão, acrescenta ao histórico.",
     )
     args = parser.parse_args()
+
+    if args.from_execucoes:
+        raw_path, processed_path, n_raw, n_processed = salvar_dataset_de_execucoes()
+        print("Origem: CSVs de data/raw/execucoes")
+        print(f"Histórico bruto: {n_raw} registros")
+        print(f"Dataset processado: {n_processed} registros")
+        print(f"CSV histórico: {raw_path}")
+        print(f"CSV processado: {processed_path}")
+        return
 
     df_execucao = carregar_coleta(args.json)
     resultados = salvar_dataset(df_execucao, append_historico=not args.overwrite)
     execucao_path, raw_path, processed_path, n_execucao, n_raw, n_processed = resultados
 
     print(f"Coleta atual: {n_execucao} registros")
-    print(f"Historico bruto: {n_raw} registros")
+    print(f"Histórico bruto: {n_raw} registros")
     print(f"Dataset processado: {n_processed} registros")
-    print(f"CSV da execucao: {execucao_path}")
-    print(f"CSV historico: {raw_path}")
+    print(f"CSV da execução: {execucao_path}")
+    print(f"CSV histórico: {raw_path}")
     print(f"CSV processado: {processed_path}")
 
 

@@ -11,3 +11,4 @@ requirements.txt
 data/raw/execucoes/*.csv
 /mlflow.db
 /mlruns
+/data

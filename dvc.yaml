@@ -1,8 +1,8 @@
 stages:
   gerar_dataset:
-    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_dataset.py --from-execucoes
     deps:
-      - bot_coleta_skincare/artifacts/coleta/coleta.json
+      - data/raw/execucoes
       - ml/gerar_dataset.py
     outs:
       - data/raw/produtos_coletados_historico.csv
@@ -18,6 +18,20 @@ stages:
       - mlflow.db
       - mlruns
 
+  gerar_relatorio_eda:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_eda.py
+    deps:
+      - data/raw/produtos_coletados_historico.csv
+      - data/processed/produtos_sanitizados.csv
+      - data/processed/produtos_ml.csv
+      - ml/gerar_relatorio_eda.py
+    outs:
+      - reports/eda/resumo_eda.md
+      - reports/eda/distribuicao_categorias.png
+      - reports/eda/distribuicao_lojas.png
+      - reports/eda/distribuicao_alvo.png
+      - reports/eda/precos_por_categoria.png
+
   gerar_relatorio_drift:
     cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_drift.py
     deps:
@@ -25,3 +39,21 @@ stages:
       - ml/gerar_relatorio_drift.py
     outs:
       - reports/evidently/relatorio_drift.html
+
+  gerar_relatorio_modelo:
+    cmd: .\.ml-glowwise\Scripts\python.exe ml\gerar_relatorio_modelo.py
+    deps:
+      - data/processed/produtos_ml.csv
+      - ml/gerar_relatorio_modelo.py
+      - ml/treinar_modelo.py
+    outs:
+      - reports/modelo/metricas_modelos.csv
+      - reports/modelo/comparacao_metricas.png
+      - reports/modelo/roc_modelos.png
+      - reports/modelo/pr_modelos.png
+      - reports/modelo/curva_loss_treino_validacao_gradient_boosting.png
+      - reports/modelo/curva_treino_validacao_random_forest.png
+      - reports/modelo/matriz_confusao_random_forest.png
+      - reports/modelo/matriz_confusao_logistic_regression.png
+      - reports/modelo/matriz_confusao_gradient_boosting.png
+      - reports/modelo/resumo_modelo.md
